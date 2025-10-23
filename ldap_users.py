@@ -12,6 +12,7 @@ IP_LIST="ldap.txt"
 DOMAIN="htb.local"
 USER="svc-alfresco"
 PASSWORD="s3rvice"
+FILTER_FLAG="DONT_EXPIRE_PASSWORD, DONT_REQUIRE_PREAUTH, PASSWORD_NOT_REQUIRED"
 
 headers = ["User", "Groups", "UAC","Vulns"]
 
@@ -108,7 +109,15 @@ def ldap_search(conn, base_domain, query, attributes=None):
                 uac = decode_uac(attrs['userAccountControl'])
                 vulns = decode_vulns(attrs)
                 new_value = [sam_account_name, groups, uac, vulns]
-                users_list.append(new_value)
+                if FILTER_FLAG:
+                    filter_split = FILTER_FLAG.split(",")
+                    for filter in filter_split:
+                        filter = filter.strip("")
+                        if uac.find(filter)>=0:
+                            users_list.append(new_value)
+                            break
+                else:
+                    users_list.append(new_value)
                 
     
     print(tabulate(users_list, headers=headers,tablefmt="simple_grid"))
