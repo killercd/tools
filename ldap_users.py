@@ -2,16 +2,18 @@ from ldap3 import Server, Connection, ALL, SUBTREE, ALL_ATTRIBUTES, ALL_OPERATIO
 from pathlib import Path
 from ldap3 import BASE
 import ssl
+import sys
 from tabulate import tabulate
+from colorama import Fore, Back, Style
 
-USE_SSL=True
+USE_SSL=False
 AUTO_RESOLVE_DOMAIN=False
 IP_LIST="ldap.txt"
-DOMAIN=""
-USER=""
-PASSWORD=""
+DOMAIN="htb.local"
+USER="svc-alfresco"
+PASSWORD="s3rvice"
 
-headers = ["User", "Groups", "UAC"]
+headers = ["User", "Groups", "UAC","Vulns"]
 
 
 FLAGS = [
@@ -43,7 +45,8 @@ def decode_uac(uac):
     else:
         uac = int(uac)
     flags = [name for bit, name in FLAGS if (uac & bit) == bit]
-    return " | ".join(flags) if flags else "NONE"
+    return "\n".join(flags) if flags else "NONE"
+
 
 def decode_instance_type(value):
     flags = []
@@ -62,9 +65,26 @@ def decode_instance_type(value):
 
 
 def decode_groups(attrs):
+    group_list = []
     if 'memberOf' in attrs:
-        
+        for group in attrs["memberOf"]:
+            group_info = group.split(",")
+            for subgroup in group_info:
+                if subgroup.startswith("CN="):
+                    subgroup=subgroup.replace("CN=","")
+                    group_list.append(subgroup)
+    return "\n".join(list(set(group_list)))
 
+def decode_vulns(attrs):
+    vulns = []
+    if "servicePrincipalName" in attrs and attrs["servicePrincipalName"] is not None:
+        vulns.append(Fore.RED + 'Kerberoasting'+ Style.RESET_ALL)
+    if "DONT_REQUIRE_PREAUTH" in decode_uac(attrs['userAccountControl']):
+        vulns.append(Fore.RED + 'AS-REP Roasting'+ Style.RESET_ALL)
+    return "\n".join(vulns)
+
+
+        
 def ldap_search(conn, base_domain, query, attributes=None):
 
 
@@ -80,56 +100,51 @@ def ldap_search(conn, base_domain, query, attributes=None):
         if entry.get('type') == 'searchResEntry':
             dn = entry.get('dn')
             attrs = entry.get('attributes', {})
-
+            
             
             if 'objectClass' in attrs and 'user' in attrs['objectClass']:
                 sam_account_name = attrs['sAMAccountName']
                 groups = decode_groups(attrs)
                 uac = decode_uac(attrs['userAccountControl'])
-
-                new_value = []
+                vulns = decode_vulns(attrs)
+                new_value = [sam_account_name, groups, uac, vulns]
                 users_list.append(new_value)
                 
-
-            """
-            for k, v in attrs.items():
-                if k=="userAccountControl":
-                    new_entry["attrs"].append({"id": k, "val": decode_uac(v)})entry
-                elif k=="instanceType":
-
-                    new_entry["attrs"].append({"id": k, "val": decode_instance_type(v)})
-                else:    
-                    new_entry["attrs"].append({"id": k, "val": v})
-            """
     
-    print(tabulate(users_list, headers=headers,tablefmt="github"))
+    print(tabulate(users_list, headers=headers,tablefmt="simple_grid"))
+
 tls_config =Tls(validate=ssl.CERT_NONE, version=ssl.PROTOCOL_TLSv1_2)
 
 
-ip = "10.209.5.14"
-if not USE_SSL:
-    server = Server(f"ldap://{ip}", get_info=ALL)
-else:
-    server = Server(f"ldaps://{ip}", port=636, use_ssl=True, get_info=ALL, tls=tls_config)
 
-conn = Connection(server, user=USER, password=PASSWORD, auto_bind=True)
-
-if AUTO_RESOLVE_DOMAIN:
-    print("[*] Resolving base domain via RootDSE...")
-    conn.search(search_base='', search_filter='(objectClass=*)', search_scope=BASE)
-    if conn.entries:
-        root_dse_entry = conn.response[0]
-        base_domain = root_dse_entry['attributes'].get('defaultNamingContext')
-        print(f"[+] Base domain resolved: {base_domain}")
+ldap_ip_file = open(IP_LIST, 'r')
+for ip in ldap_ip_file.readlines():
+    ip = ip.strip("\n")
+    print(f"[*] Getting users info from {ip}...")
+    if not USE_SSL:
+        server = Server(f"ldap://{ip}", get_info=ALL)
     else:
-        print("[-] Could not resolve base domain automatically.")
-        sys.exit(1)
-else:
-    base_domain=DOMAIN.replace(".",",DC=")
-    base_domain="DC="+base_domain
+        server = Server(f"ldaps://{ip}", port=636, use_ssl=True, get_info=ALL, tls=tls_config)
 
-print("[*] Getting users info...")
-users_full = ldap_search(conn, base_domain, '(sAMAccountName=*)')
+    conn = Connection(server, user=USER, password=PASSWORD, auto_bind=True)
 
+    if AUTO_RESOLVE_DOMAIN:
+        print("[*] Resolving base domain via RootDSE...")
+        conn.search(search_base='', search_filter='(objectClass=*)', search_scope=BASE)
+        if conn.entries:
+            root_dse_entry = conn.response[0]
+            base_domain = root_dse_entry['attributes'].get('defaultNamingContext')
+            print(f"[+] Base domain resolved: {base_domain}")
+        else:
+            print("[-] Could not resolve base domain automatically.")
+            sys.exit(1)
+    else:
+        base_domain=DOMAIN.replace(".",",DC=")
+        base_domain="DC="+base_domain
 
+    
+    users_full = ldap_search(conn, base_domain, '(sAMAccountName=*)')
+
+    print("")
+ldap_ip_file.close()
 
