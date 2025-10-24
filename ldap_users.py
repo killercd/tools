@@ -7,11 +7,11 @@ from tabulate import tabulate
 from colorama import Fore, Back, Style
 
 USE_SSL=False
-AUTO_RESOLVE_DOMAIN=False
-IP_LIST="ldap.txt"
-DOMAIN="htb.local"
-USER="svc-alfresco"
-PASSWORD="s3rvice"
+AUTO_RESOLVE_DOMAIN=True
+IP_LIST="subnet.txt"
+DOMAIN=""
+USER=""
+PASSWORD=""
 FILTER_FLAG="DONT_EXPIRE_PASSWORD, DONT_REQUIRE_PREAUTH, PASSWORD_NOT_REQUIRED"
 
 headers = ["User", "Groups", "UAC","Vulns"]
@@ -130,30 +130,38 @@ ldap_ip_file = open(IP_LIST, 'r')
 for ip in ldap_ip_file.readlines():
     ip = ip.strip("\n")
     print(f"[*] Getting users info from {ip}...")
-    if not USE_SSL:
-        server = Server(f"ldap://{ip}", get_info=ALL)
-    else:
-        server = Server(f"ldaps://{ip}", port=636, use_ssl=True, get_info=ALL, tls=tls_config)
-
-    conn = Connection(server, user=USER, password=PASSWORD, auto_bind=True)
-
-    if AUTO_RESOLVE_DOMAIN:
-        print("[*] Resolving base domain via RootDSE...")
-        conn.search(search_base='', search_filter='(objectClass=*)', search_scope=BASE)
-        if conn.entries:
-            root_dse_entry = conn.response[0]
-            base_domain = root_dse_entry['attributes'].get('defaultNamingContext')
-            print(f"[+] Base domain resolved: {base_domain}")
+    try:
+        if not USE_SSL:
+            server = Server(f"ldap://{ip}", get_info=ALL)
         else:
-            print("[-] Could not resolve base domain automatically.")
-            sys.exit(1)
-    else:
-        base_domain=DOMAIN.replace(".",",DC=")
-        base_domain="DC="+base_domain
+            server = Server(f"ldaps://{ip}", port=636, use_ssl=True, get_info=ALL, tls=tls_config)
 
-    
-    users_full = ldap_search(conn, base_domain, '(sAMAccountName=*)')
+        conn = Connection(server, user=USER, password=PASSWORD, auto_bind=True)
 
-    print("")
+        if AUTO_RESOLVE_DOMAIN:
+            
+            print("[*] Resolving base domain via RootDSE...")
+            conn.search(search_base='',
+                        search_filter='(objectClass=*)',
+                        search_scope='BASE',
+                        attributes=['namingContexts'])
+            if conn.entries:
+                naming_contexts = conn.entries[0].namingContexts.values
+                for nc in naming_contexts:
+                    if nc.startswith('DC='):
+                        base_domain = nc
+                        print(f"Server naming contexts: {naming_contexts}")
+                        break
+                
+                
+        else:
+            base_domain=DOMAIN.replace(".",",DC=")
+            base_domain="DC="+base_domain
+
+        
+        users_full = ldap_search(conn, base_domain, '(sAMAccountName=*)')
+
+        print("")
+    except:
+        print("Connection error")
 ldap_ip_file.close()
-
